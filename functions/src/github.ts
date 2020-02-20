@@ -14,7 +14,8 @@
  * limitations under the License.
  */
 import { Util } from "../../shared/util";
-import { ProjectConfig, RepoMetadata } from "../../shared/types";
+import { Timestamp } from "@google-cloud/firestore";
+import { ProjectConfig, RepoMetadata, RepoRelease } from "../../shared/types";
 import * as request from "request-promise-native";
 
 const parselh = require("parse-link-header");
@@ -22,52 +23,66 @@ const urljoin = require("url-join");
 
 export class Github {
   token: string;
+  branch: string;
 
-  constructor(token: string) {
+  constructor(token: string, branch: string) {
     this.token = token;
-  }
-
-  /**
-   * Get the URL to the config for a particular project ID.
-   */
-  static getConfigUrl(id: string) {
-    return urljoin(Github.getRawContentBaseUrl(id), ".opensource/project.json");
-  }
-
-  /**
-   * Get the URL to the content for a particular project ID.
-   */
-  static getContentUrl(id: string, config: ProjectConfig) {
-    // Path to content, relative to the project
-    const contentPath = config.content;
-    return urljoin(Github.getRawContentBaseUrl(id), contentPath);
+    this.branch = branch;
   }
 
   /**
    * Get the URL for the raw content for a page.
    */
-  static getPageUrl(id: string, page: string) {
-    return urljoin(Github.getRawContentBaseUrl(id), page);
+  static getPageContentUrl(id: string, page: string, branch: string) {
+    return urljoin(Github.getRawContentBaseUrl(id, branch), page);
   }
 
   /**
    * Get the raw.githubusercontent URL for a file
    */
-  static getRawContentUrl(owner: string, repo: string, path: string): string {
-    return `https://raw.githubusercontent.com/${owner}/${repo}/master/${path}`;
+  static getRawContentUrl(
+    owner: string,
+    repo: string,
+    path: string,
+    branch: string
+  ): string {
+    return `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${path}`;
   }
 
   /**
    * Get the githubusercontent base URL for a repo.
    */
-  static getRawContentBaseUrl(id: string) {
+  static getRawContentBaseUrl(id: string, branch: string) {
     // Parse the ID into pieces
     const idObj = Util.parseProjectId(id);
 
     // Get the URL to the root folder
-    const pathPrefix = idObj.path ? idObj.path + "/" : "";
+    const pathPrefix = idObj.path ? `${idObj.path}/` : "";
 
-    return Github.getRawContentUrl(idObj.owner, idObj.repo, pathPrefix);
+    return Github.getRawContentUrl(idObj.owner, idObj.repo, pathPrefix, branch);
+  }
+
+  /**
+   * Get the URL to the config for a particular project ID.
+   */
+  private static getConfigUrl(id: string, branch: string) {
+    return urljoin(
+      Github.getRawContentBaseUrl(id, branch),
+      ".opensource/project.json"
+    );
+  }
+
+  /**
+   * Get the URL to the main content for a particular project ID.
+   */
+  private static getMainContentUrl(
+    id: string,
+    config: ProjectConfig,
+    branch: string
+  ) {
+    // Path to content, relative to the project
+    const contentPath = config.content;
+    return urljoin(Github.getRawContentBaseUrl(id, branch), contentPath);
   }
 
   /**
@@ -111,6 +126,24 @@ export class Github {
   }
 
   /**
+   * Get recent releases for a GitHub repo
+   */
+  getRepoReleases(org: string, repo: string): Promise<RepoRelease[]> {
+    const url = `https://api.github.com/repos/${org}/${repo}/releases`;
+    return request(url, this.getStandardOptions()).then(resp => {
+      return resp.map((release: any) => {
+        return {
+          org,
+          repo,
+          url: release.html_url,
+          tag_name: release.tag_name,
+          created_at: Timestamp.fromDate(new Date(release.created_at))
+        };
+      });
+    });
+  }
+
+  /**
    * Read all of the pages from a Github API url and return them concatenated.
    */
   readAllPages(url: string, results: any[] = []): Promise<any[]> {
@@ -137,10 +170,33 @@ export class Github {
   }
 
   /**
+   * Determine if the config for the given project exists.
+   */
+  hasProjectConfig(id: string): Promise<boolean> {
+    return this.pageExists(Github.getConfigUrl(id, this.branch));
+  }
+
+  /**
+   * Get project config as raw content.
+   */
+  getProjectConfig(id: string) {
+    const url = Github.getConfigUrl(id, this.branch);
+    return this.getRawContent(url);
+  }
+
+  /**
+   * Get the raw content of a project's main content file.
+   */
+  getRawProjectContent(id: string, config: ProjectConfig) {
+    const url = Github.getMainContentUrl(id, config, this.branch);
+    return this.getRawContent(url);
+  }
+
+  /**
    * Get raw content from Github.
    * URL should be a raw.githubusercontent page.
    */
-  getContent(url: string) {
+  getRawContent(url: string) {
     return request(url, this.getContentGetOptions());
   }
 

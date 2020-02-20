@@ -1,22 +1,11 @@
 PROD_PROJECT="fir-oss"
 
-build-docker:
-	cd static \
-		&& docker build -t static-renderer . \
-		&& docker tag static-renderer us.gcr.io/fir-oss/static-renderer \
-		&& cd -
-
-deploy-docker: build-docker
-	docker push us.gcr.io/fir-oss/static-renderer
-
-deploy-cronjobs: deploy-docker
-	gcloud container clusters get-credentials --zone=us-central1-a cronjobs
-	kubectl create -f cronjobs/daily-renderstatic.yaml
-	kubectl create -f cronjobs/daily-getallprojects.yaml
+cloud-build:
+	gcloud --project=$(PROD_PROJECT) builds submit --config static/cloudbuild.yaml static
 
 build-functions:
 	cd functions \
-		&& yarn install \
+		&& npm install \
 		&& npm run build \
 		&& cd -
 
@@ -25,7 +14,7 @@ deploy-functions: build-functions
 
 build-hosting:
 	cd frontend \
-		&& yarn install \
+		&& npm install \
 		&& npm run get-routes \
 		&& npm run gen \
 		&& cd -

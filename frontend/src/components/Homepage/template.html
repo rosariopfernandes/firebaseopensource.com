@@ -12,7 +12,7 @@
         <div class="section" v-if="showingAllPlatforms()">
           <div class="content" id="welcome_card">
             <div class="image">
-              <img src="/firebase_high_five.png" />
+              <img src="/firebase-github.png" />
             </div>
             <div class="body">
               <h1>Firebase ❤️ Open Source</h1>
@@ -21,8 +21,33 @@
                 On <a href="/">firebaseopensource.com</a> you can discover all of the tools you need to build a great app.
                 <br /><br />
                 Is there a great open source Firebase project that should be included here? 
-                <a target="_blank" href="https://github.com/firebase/firebaseopensource.com/issues/new">Let us know!</a>
+                <a target="_blank" href="https://github.com/firebase/firebaseopensource.com/issues/new?template=new_project.md">Let us know!</a>
               </span>
+            </div>
+          </div>
+        </div>
+
+        <div class="section" v-if="showingAllPlatforms()">
+          <div class="content" id="recent_releases">
+            <div class="section-title">
+              <span>
+                <i class="material-icons">event</i>Recent Releases
+              </span>
+            </div>
+            <div class="releases">
+              <div class="release" v-for="release in releases">
+                <div class="grid">
+                  <a :href="`/projects/${release.org}/${release.repo}/`" class="release-title">
+                    {{release.repo}}
+                  </a>
+                  <p class="release-description">
+                    <code>{{release.tag_name}}</code> released {{releaseTime(release)}}.
+                  </p>
+                  <a :href="release.url" target="_blank">
+                    <button class="button-right">RELEASE NOTES</button>
+                  </a>
+                </div>
+              </div>
             </div>
           </div>
         </div>
@@ -31,14 +56,16 @@
           <div class="content" v-if="isSectionVisible(category.platform)">
             <div class="section-title">
               <a :href="`/platform/${category.platform}`">
-                <i class="material-icons">{{category.icon}}</i>
-                {{category.title}}
+                <span>
+                <i class="material-icons">{{category.icon}}</i>{{category.title}}
+                </span>
               </a>
               <a :href="`/platform/${category.platform}`">
-                <button v-if="showingAllPlatforms()">SEE ALL</button>
+                <button class="button-right" v-if="showingAllPlatforms()">SEE ALL</button>
               </a>
             </div>
             <div class="projects">
+              <!-- TODO: This is gnarly, move more of this to JS -->
               <div class="project" v-for="project in ($refs.header && $refs.header.subheader_tab_selection == 'all')? category.featured : category.projects">
 
                 <div class="grid">
@@ -58,7 +85,7 @@
                       {{project.description}}
                   </p>
                   <a :href="`/projects/${project.org}/${project.repo}/`">
-                    <button>LEARN MORE</button>
+                    <button class="button-right">LEARN MORE</button>
                   </a>
                 </div>
               </div>

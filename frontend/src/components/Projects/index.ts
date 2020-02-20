@@ -7,8 +7,9 @@ import { FirebaseSingleton } from "../../services/firebaseSingleton";
 import HeaderBar from "../../components/HeaderBar";
 import FourOhFour from "../../components/FourOhFour";
 
-import { Config } from "../../types/config";
 import { Route } from "vue-router";
+import { Env, StoredProjectConfig, TabConfig, PageConfig } from "../../../../shared/types";
+import { Util } from "../../../../shared/util";
 
 const Clipboard = require("clipboard");
 
@@ -53,7 +54,7 @@ const OSS_SIDEBAR = new SidebarSection("Open Source", [
   new SelectableLink("Home", "/"),
   new SelectableLink(
     "Add Project",
-    "https://github.com/firebase/firebaseopensource.com/issues/new/choose",
+    "https://github.com/firebase/firebaseopensource.com/issues/new?template=new_project.md",
     false,
     true
   )
@@ -76,13 +77,53 @@ const FIREBASE_SIDEBAR = new SidebarSection("Firebase", [
   )
 ]);
 
+interface RepoInfo {
+  org: string;
+  repo: string;
+  stars: number;
+}
+
+interface DisplayTimestamps {
+  last_updated_from_now: string;
+  last_fetched_from_now: string;
+}
+
+interface RelatedRepo {
+  name: string;
+  path: string;
+}
+
+interface ProjectArgs {
+  env: Env;
+
+  page_title: String;
+  sections: Section[];
+  header: Section;
+  subheader_tabs: SelectableLink[];
+  sidebar: SidebarSection[];
+  related_repos: RelatedRepo[];
+
+  info: RepoInfo;
+  timestamps: DisplayTimestamps;
+
+  // TODO: How can we possibly need found and not_found
+  is_subpage: Boolean;
+  not_found: Boolean;
+  found: Boolean;
+
+  // TODO: Do we need this?
+  dropdown_selection: String;
+}
+
 @Component({
   components: { HeaderBar, FourOhFour }
 })
-export default class Projects extends Vue {
+export default class Projects extends Vue implements ProjectArgs {
   name = "projects";
   $route: Route;
 
+  @Prop()
+  env: Env;
   @Prop()
   page_title: String;
   @Prop()
@@ -90,7 +131,9 @@ export default class Projects extends Vue {
   @Prop()
   header: Section;
   @Prop()
-  config: Config;
+  info: RepoInfo;
+  @Prop()
+  timestamps: DisplayTimestamps;
   @Prop()
   is_subpage: Boolean;
   @Prop()
@@ -100,25 +143,28 @@ export default class Projects extends Vue {
   @Prop()
   found: Boolean;
   @Prop()
-  subheader_tabs: any[];
+  subheader_tabs: SelectableLink[];
   @Prop()
   sidebar: SidebarSection[];
+  @Prop()
+  related_repos: RelatedRepo[];
 
   cancels: Function[];
   show_clone_cmd: Boolean = false;
 
-  static async load(org: string, repo: string, page: string) {
-    console.log(`load(${org}, ${repo}, ${page})`);
+  static async load(org: string, repo: string, page: string, env: Env): Promise<ProjectArgs> {
+    console.log(`load(${org}, ${repo}, ${page}, ${env})`);
     const result = {
       sections: []
-    } as any;
+    } as ProjectArgs;
+
+    // Set the environment for rendering
+    result.env = env;
 
     const fbt = await FirebaseSingleton.GetInstance();
 
     const id = [org, repo].join("::");
-
     const projectPath = `/projects/${org}/${repo}`.toLowerCase();
-    const pagePath = `${projectPath}/${page}`.toLowerCase();
 
     result.subheader_tabs = [
       new SelectableLink("Guides", projectPath, false, false),
@@ -130,10 +176,12 @@ export default class Projects extends Vue {
       )
     ];
 
-    const repoDoc = fbt.fs.collection("content").doc(id);
-    const configDoc = fbt.fs.collection("configs").doc(id);
+    // Get the path to the config and content docs, depending on the
+    // display environment
+    const repoConfigRef = fbt.fs.doc(Util.configPath(id, env));
+    const repoContentRef = fbt.fs.doc(Util.contentPath(id, env));
 
-    let pageContentDoc;
+    let pageContentDoc: firebase.firestore.DocumentReference;
     if (page) {
       let page_id = page
         .split("/")
@@ -144,31 +192,36 @@ export default class Projects extends Vue {
         page_id += ".md";
       }
 
-      pageContentDoc = repoDoc.collection("pages").doc(page_id);
+      pageContentDoc = repoContentRef.collection("pages").doc(page_id);
       result.is_subpage = true;
     } else {
       result.is_subpage = false;
-      pageContentDoc = repoDoc;
+      pageContentDoc = repoContentRef;
     }
 
-    // Load conetnt
-    const snapshot = await pageContentDoc.get();
-    if (!snapshot.exists) {
+    // Load content
+    const contentSnap = await pageContentDoc.get();
+    if (!contentSnap.exists) {
+      console.warn(`No content at page: ${pageContentDoc.path}`);
       result.not_found = true;
     } else {
       result.not_found = false;
     }
-    const data = snapshot.data();
+    const data = contentSnap.data();
 
     // Load config
-    const configSnap = await configDoc.get();
+    const configSnap = await repoConfigRef.get();
     if (configSnap.exists && !result.not_found) {
       result.found = true;
     }
+    const configData = configSnap.data() as StoredProjectConfig;
 
-    result.config = configSnap.data() as Config;
-    result.config.repo = repo;
-    result.config.org = org;
+    // Basic Github info
+    result.info = {
+      org,
+      repo,
+      stars: configData.stars
+    };
 
     // Choose the page name depending on available info:
     // Option 0 - title of the header section
@@ -176,30 +229,35 @@ export default class Projects extends Vue {
     // Option 2 - the repo name
     if (data.header.name) {
       result.page_title = data.header.name;
-    } else if (result.config.name) {
-      result.page_title = result.config.name;
+    } else if (configData.name) {
+      result.page_title = configData.name;
     } else {
       result.page_title = repo;
     }
 
-    const sections = snapshot.data().sections as Section[];
+    const sections = contentSnap.data().sections as Section[];
     result.header = data.header as Section;
 
     sections.forEach(section => {
       if (BLOCKED_SECTIONS.indexOf(section.name.toLowerCase()) >= 0) {
         return;
       }
-      section.id = this.as_id(section.name);
+      section.id = this.formatAsId(section.name);
       section.ref = "#" + section.id;
       result.sections.push(section);
     });
 
-    result.config.last_updated_from_now = distanceInWordsToNow(
-      new Date(result.config.last_updated)
+    const last_updated_from_now = distanceInWordsToNow(
+      new Date(configData.last_updated)
     ).replace("about", "");
-    result.config.last_fetched_from_now = distanceInWordsToNow(
-      result.config.last_fetched.toDate()
+    const last_fetched_from_now = distanceInWordsToNow(
+      configData.last_fetched.toDate()
     );
+
+    result.timestamps = {
+      last_updated_from_now,
+      last_fetched_from_now
+    }
 
     const projectSidebar = new SidebarSection(
       "Project",
@@ -207,80 +265,67 @@ export default class Projects extends Vue {
       true
     );
 
-    if (result.config.pages) {
+    if (configData.pages) {
       const subpages: SelectableLink[] = [];
-      Object.keys(result.config.pages).forEach((subPath: string) => {
-        // The pages config can either look like:
-        // { "path.md": true }
-        // OR
-        // { "path.md": "TITLE" }
+      for (const pageConfig of configData.pages) {
         let pageName;
-        const val = result.config.pages[subPath];
-        if (typeof val === "string") {
-          pageName = val;
+        if (pageConfig.name) {
+          pageName = pageConfig.name;
         } else {
-          pageName = subPath.toLowerCase();
+          pageName = pageConfig.path.toLowerCase();
           pageName = pageName.replace("/readme.md", "");
           pageName = pageName.replace(".md", "");
         }
 
-        const selected = page && page.toLowerCase() === subPath.toLowerCase();
-        const href = `${projectPath}/${subPath}`.toLowerCase();
+        const selected = page && page.toLowerCase() === pageConfig.path.toLowerCase();
+        const href = `${projectPath}/${pageConfig.path}`.toLowerCase();
         subpages.push(new SelectableLink(pageName, href, selected));
-      });
-
-      // Sort the pages by their title (alphabetically)
-      subpages.sort((a, b) => {
-        if (a.title > b.title) {
-          return 1;
-        } else if (a.title == b.title) {
-          return 0;
-        } else {
-          return -1;
-        }
-      });
-
+      }
       projectSidebar.pages = projectSidebar.pages.concat(subpages);
     }
     result.sidebar = [projectSidebar, OSS_SIDEBAR, FIREBASE_SIDEBAR];
 
-    // Tabs are in this format:
-    // tabs: [
-    //  {
-    //    title: text,
-    //    href: href
-    //  }
-    // ]
-    if (result.config.tabs) {
-      result.config.tabs.forEach((tab: any) => {
+    // Add each "tab" as a link in the subheader
+    if (configData.tabs) {
+      configData.tabs.forEach((tab: TabConfig) => {
         result.subheader_tabs.push(
           new SelectableLink(tab.title, tab.href, false, true)
         );
       });
     }
 
+    // Related repos
+    result.related_repos = this.relatedRepos(configData);
+
     return result;
   }
 
-  destroyed() {
-    this.cancels.forEach(c => c());
-  }
-
-  static as_id(text: String) {
+  static formatAsId(text: String) {
     return text.toLowerCase().replace(" ", "_");
   }
 
-  /**
-   * Format the name of a related project for display.
-   * Strips the "firebase/" from the name to save space, since
-   * the firebase context is implied on firebaseopensource.com
-   */
-  fmtRelated(project: string) {
-    if (project.indexOf("firebase/") >= 0) {
-      return project.substring("firebase/".length, project.length);
+  static relatedRepos(config: StoredProjectConfig): RelatedRepo[] {
+    if (!config.related) {
+      return [];
     }
 
-    return project;
+    return Object.keys(config.related).map((repo: string) => {
+      // Format the name of a related project for display.
+      // Strips the "firebase/" from the name to save space, since
+      // the firebase context is implied on firebaseopensource.com
+      let name = repo;
+      if (repo.indexOf("firebase/") >= 0) {
+        name = repo.substring("firebase/".length, repo.length);
+      }
+  
+      return {
+        name,
+        path: repo
+      }
+    });
+  }
+  get isStaging() {
+    return this.env === Env.STAGING;
   }
 
   mounted() {
@@ -294,10 +339,10 @@ export default class Projects extends Vue {
       console.log("Cannot fix URL");
     }
 
-    document.querySelectorAll("pre code").forEach(function(el) {
-      hljs.highlightBlock(el);
-    });
-
     new Clipboard(".copy-btn");
+  }
+
+  destroyed() {
+    this.cancels.forEach(c => c());
   }
 }

@@ -2,6 +2,14 @@
 @import "../../styles/variables.scss";
 
 #projects {
+  .warning {
+    background: #FF8A65;
+    text-align: center;
+    color: white;
+    padding-top: 8px;
+    padding-bottom: 8px;
+  }
+
   // TODO: Make the margin-top unbreakable
   // TODO: Hide in mobile
   .sidebar {
@@ -143,7 +151,7 @@
 
   .body-column {
     display: grid;
-    grid-template-columns: 1fr fit-content(100%);
+    grid-template-columns: minmax(50%, max-content) 1fr;
     grid-template-areas:
       "left right"
       "content content";
@@ -182,6 +190,12 @@
       "button button"
       "copy copy";
     grid-gap: 6px;
+
+    float: right;
+    @media (max-width: $tablet) {
+      float: left;
+      margin-bottom: 8px;
+    }
 
     .badge {
       border-radius: 3px;
@@ -235,9 +249,6 @@
   .related {
     width: 100%;
     overflow: hidden;
-    display: grid;
-    grid-template-columns: fit-content(100%) 1fr;
-    align-items: center;
     margin-top: 16px;
 
     .title {

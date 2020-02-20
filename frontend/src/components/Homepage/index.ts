@@ -14,24 +14,34 @@
  * limitations under the License.
  */
 import Vue from "vue";
-import { Component, Inject, Model, Prop, Watch } from "vue-property-decorator";
+import { Component, Prop } from "vue-property-decorator";
 import { FirebaseSingleton } from "../../services/firebaseSingleton";
 
 import HeaderBar from "../HeaderBar";
 
-import { pickLogoLetter } from "../../utils";
+import { pickLogoLetter, daysAgo } from "../../utils";
 
 import { Util } from "../../../../shared/util";
-import { Config } from "../../types/config";
-import { Route } from "vue-router";
+import { RepoRelease, StoredProjectConfig } from "../../../../shared/types";
 
 type Category = {
   title: string;
   platform: string;
   icon: string;
-  projects: Config[];
-  featured: Config[];
+  projects: ProjectInfo[];
+  featured: ProjectInfo[];
 };
+
+type ProjectInfo = {
+  org: string;
+  repo: string;
+
+  name: string;
+  description: string;
+
+  letter: string;
+  color: string;
+}
 
 const COLORS = [
   "#039BE5",
@@ -60,12 +70,15 @@ export default class Homepage extends Vue {
   ];
 
   fbt: FirebaseSingleton;
-  cancels: Function[] = [];
 
   @Prop()
   platform: string;
+
   @Prop()
   categories: Category[];
+
+  @Prop()
+  releases: RepoRelease[];
 
   static getCategories(): Category[] {
     return [
@@ -110,70 +123,91 @@ export default class Homepage extends Vue {
   static async load(platform: string) {
     const fbt = await FirebaseSingleton.GetInstance();
     const categories = this.getCategories();
-    // TODO use
-    const cancels = [] as any[];
 
     let limit = 6;
     if (platform && platform !== "all") {
       limit = 100;
     }
 
-    await Promise.all(
-      categories.map((category, categoryIndex) => {
-        return new Promise((resolve, reject) => {
-          cancels.push(
-            fbt.fs
-              .collection("configs")
-              .where("blacklist", "==", false)
-              .where("fork", "==", false)
-              .orderBy(`platforms.${category.platform}`)
-              .orderBy("stars", "desc")
-              .orderBy("description")
-              .limit(limit)
-              .onSnapshot((snapshot: any) => {
-                snapshot.docs.forEach((doc: any, docIndex: any) => {
-                  const config = doc.data() as Config;
-                  config.letter = pickLogoLetter(config.name);
-                  config.color =
-                    COLORS[(docIndex + categoryIndex) % COLORS.length];
+    const releasesSnap = await fbt.fs
+      .collection("releases")
+      .orderBy("created_at", "desc")
+      .limit(10)
+      .get();
 
-                  const id = doc.id;
-                  const parsedId = Util.parseProjectId(id);
-                  config.org = parsedId.owner;
-                  config.repo = parsedId.repo;
-
-                  const words = config.description.split(" ");
-                  let sentence = words.slice(0, 10).join(" ");
-
-                  if (words.length > 15) {
-                    sentence += "...";
-                  }
-
-                  config.description = sentence;
-
-                  if (category.featured.length < 6) {
-                    category.featured.push(config);
-                  }
-
-                  category.projects.push(config);
-                });
-                resolve();
-              })
-          );
-        });
-      })
+    // Want to get a total of 3 releases but make sure no repo
+    // is mentioned more than once
+    const releasedRepos = new Set<String>();
+    const releases: RepoRelease[] = [];
+    releasesSnap.docs.forEach(
+      (doc: firebase.firestore.QueryDocumentSnapshot) => {
+        const release = doc.data() as RepoRelease;
+        if (!releasedRepos.has(release.repo) && releases.length < 3) {
+          releases.push(release);
+          releasedRepos.add(release.repo);
+        }
+      }
     );
 
+    for (let i = 0; i < categories.length; i++) {
+      const categoryIndex = i;
+      const category = categories[i];
+
+      const snapshot = await fbt.fs
+        .collection("configs")
+        .where("blacklist", "==", false)
+        .where("fork", "==", false)
+        .orderBy(`platforms.${category.platform}`)
+        .orderBy("stars", "desc")
+        .orderBy("description")
+        .limit(limit)
+        .get();
+
+      snapshot.docs.forEach(
+        (doc: firebase.firestore.QueryDocumentSnapshot, docIndex: number) => {
+          const config = doc.data() as StoredProjectConfig;
+
+          const letter = pickLogoLetter(config.name);
+          const color = COLORS[(docIndex + categoryIndex) % COLORS.length];
+
+          const parsedId = Util.parseProjectId(doc.id);
+          const org = parsedId.owner;
+          const repo = parsedId.repo;
+
+          const words = config.description.split(" ");
+          let sentence = words.slice(0, 10).join(" ");
+          if (words.length > 10) {
+            sentence += "...";
+          }
+          const description = sentence;
+
+          const catProj: ProjectInfo = {
+            name: config.name,
+            description,
+            letter,
+            color,
+            org,
+            repo
+          }
+
+          if (category.featured.length < 6) {
+            category.featured.push(catProj);
+          }
+
+          category.projects.push(catProj);
+        }
+      );
+    }
+
     return {
+      releases,
       categories
     };
   }
 
-  async mounted() {}
+  mounted() {}
 
-  destroyed() {
-    this.cancels.forEach(c => c());
-  }
+  destroyed() {}
 
   isSectionVisible(section: string) {
     if (!this.platform || this.platform === "all") {
@@ -185,5 +219,9 @@ export default class Homepage extends Vue {
 
   showingAllPlatforms() {
     return this.platform === "all";
+  }
+
+  releaseTime(release: RepoRelease) {
+    return daysAgo(release.created_at);
   }
 }
